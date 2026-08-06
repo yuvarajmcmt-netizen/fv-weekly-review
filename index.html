@@ -776,7 +776,12 @@ const RCA_SI   = JSON.parse(document.getElementById('rca-si-payload').textConten
 // instance per row makes the tab visibly stall.
 const TREND_N = 8;   // how many trailing weeks the sparkline + columns cover
 
-// weeks: ascending week numbers; getter(wk) -> [igcc, orders] or null
+// weeks: ascending week numbers; getter(wk) MUST return [igcc, orders] or null.
+// CAREFUL: the payloads disagree on element order. ITEMS/NECTR by_week store
+// [igcc, orders], but QNP.store_week_item stores [orders, igcc] (built as
+// iw[0]=orders_total_item, iw[1]=orders_igcc_item). Callers must normalise to
+// [igcc, orders] here — getting it backwards silently yields orders/igcc, which
+// shows up as absurd percentages like 3016.67% rather than an obvious error.
 function pctSeries(weeks, getter) {
   return weeks.map(wk => {
     const rec = getter(wk);
@@ -2960,7 +2965,9 @@ function initQnp() {
           const swi = STORE_WEEK_ITEM[store];
           if (!swi) return null;
           const wkd = swi[String(wk)];
-          return wkd ? (wkd[r.code] || null) : null;
+          const rec = wkd ? wkd[r.code] : null;
+          // store_week_item is [orders, igcc]; pctSeries wants [igcc, orders]
+          return rec ? [rec[1], rec[0]] : null;
         });
         const bk    = rcaBuckets(store, weeks, r.code);
         const bkTot = bk.reduce((a, b) => a + b, 0);
