@@ -692,13 +692,65 @@ let QNP      = null;   // Item QnP
 const EXTERNAL_SRC = { item_rca: 'wow_igcc_data/item_rca.json', qnp: 'wow_igcc_data/qnp.json' };
 const _extCache = {};
 
+// ── Rehydrators ──────────────────────────────────────────────────────────────
+// The external payloads intern repeated strings (RCA reason/spoc names, item codes)
+// as integer indices to keep the deployed site small enough for GitHub Pages to
+// publish. These expand them back to the original shapes so every render function
+// downstream sees exactly what it saw when the data was inlined as plain JSON.
+
+function rehydrateQnp(j) {
+  if (!j || !j.swi_c) return j;                 // already plain
+  const codes = j.codes || [];
+  const out = {};
+  for (const store in j.swi_c) {
+    const wks = j.swi_c[store], byWk = {};
+    for (const wk in wks) {
+      const flat = wks[wk], items = {};
+      for (let i = 0; i + 2 < flat.length; i += 3) {
+        items[codes[flat[i]]] = [flat[i + 1], flat[i + 2]];
+      }
+      byWk[wk] = items;
+    }
+    out[store] = byWk;
+  }
+  j.store_week_item = out;
+  delete j.swi_c;
+  delete j.codes;
+  return j;
+}
+
+function rehydrateItemRca(j) {
+  if (!j || !j.reasons_tbl) return j;           // already plain
+  const RT = j.reasons_tbl, ST = j.spocs_tbl || [];
+  for (const wk in (j.by_week || {})) {
+    const wd = j.by_week[wk];
+    const blocks = [wd.pan_india || {}];
+    for (const city in (wd.cities || {})) blocks.push(wd.cities[city]);
+    for (const blk of blocks) {
+      for (const code in blk) {
+        const sp = blk[code].sp || {}, nsp = {};
+        for (const si in sp) {
+          const rec = sp[si], nr = {};
+          for (const ri in (rec.r || {})) nr[RT[ri]] = rec.r[ri];
+          nsp[ST[si] !== undefined ? ST[si] : si] = { i: rec.i, r: nr };
+        }
+        blk[code].sp = nsp;
+      }
+    }
+  }
+  delete j.reasons_tbl;
+  delete j.spocs_tbl;
+  return j;
+}
+
 async function ensureData(key) {
   if (_extCache[key]) return true;
   const url = EXTERNAL_SRC[key];
   const res = await fetch(url, { cache: 'force-cache' });
   if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
   const json = await res.json();
-  if (key === 'item_rca') ITEM_RCA = json; else QNP = json;
+  if (key === 'item_rca') ITEM_RCA = rehydrateItemRca(json);
+  else                    QNP      = rehydrateQnp(json);
   _extCache[key] = true;
   return true;
 }
