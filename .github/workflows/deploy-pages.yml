@@ -12,7 +12,10 @@ permissions:
 
 concurrency:
   group: fv-dashboard-pages
-  cancel-in-progress: true
+  # Queue rather than cancel. With cancel-in-progress a re-provision or a second
+  # trigger kills an in-flight deploy, which showed up as a "cancelled" job and a
+  # silently un-updated site.
+  cancel-in-progress: false
 
 jobs:
   deploy:
