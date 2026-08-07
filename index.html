@@ -661,6 +661,11 @@ td.wow-cell{text-align:right}
     <div class="tbl-wrap"><div id="qnp-slab-tbl"></div></div>
   </div>
 
+  <div class="chart-card" id="qnp-trend-card" style="display:none">
+    <h2 id="qnp-trend-title">Store QnP% — week on week</h2>
+    <div class="tbl-wrap"><div id="qnp-trend-tbl"></div></div>
+  </div>
+
   <div class="chart-card" id="qnp-reason-card" style="display:none">
     <h2 id="qnp-reason-title">RCA reason breakdown</h2>
     <div class="tbl-wrap"><div id="qnp-reason-tbl"></div></div>
@@ -2991,6 +2996,9 @@ function initQnp() {
   const lineTbl   = document.getElementById('qnp-line-tbl');
   const slabCard  = document.getElementById('qnp-slab-card');
   const slabTbl   = document.getElementById('qnp-slab-tbl');
+  const trdCard   = document.getElementById('qnp-trend-card');
+  const trdTitle  = document.getElementById('qnp-trend-title');
+  const trdTbl    = document.getElementById('qnp-trend-tbl');
   const rsnCard   = document.getElementById('qnp-reason-card');
   const rsnTitle  = document.getElementById('qnp-reason-title');
   const rsnTbl    = document.getElementById('qnp-reason-tbl');
@@ -3022,6 +3030,16 @@ function initQnp() {
     });
     statsCache = { key: ck, map };
     return map;
+  }
+
+  // Weekly QnP% series for one store. STORE_WEEK entries are [orders, igcc] while
+  // pctSeries expects [igcc, orders] — normalised here so every caller gets it right.
+  function storePctSeries(store, wks) {
+    const byWk = STORE_WEEK[store];
+    return pctSeries(wks, wk => {
+      const rec = byWk ? byWk[String(wk)] : null;
+      return rec ? [rec[1], rec[0]] : null;
+    });
   }
 
   // stores passing the Line + Slab + text filters
@@ -3178,6 +3196,7 @@ function initQnp() {
       + kpiHTML('Store-level QnP%', agg.pct.toFixed(2) + '%', 'canonical store metric — source of truth');
     overlapEl.style.display = 'none';
     itemCard.style.display = 'none';
+    trdCard.style.display  = 'none';   // store list carries per-store trends already
 
     // stores with no orders in range can't be classified — count them separately so
     // the Line/slab tables always add up to the store total
@@ -3263,9 +3282,11 @@ function initQnp() {
     slTitle.textContent = `Stores — ${rows.length.toLocaleString()}`
       + (lineSel.value ? ` · ${lineSel.value} Line` : '')
       + (slabSel.value ? ` · ${(SLABS.find(x => x.key === slabSel.value) || {}).label}` : '');
+    const stw = weeks.slice(-TREND_N);
     let th = `<table><thead><tr>
       <th>#</th><th>Store</th><th>City</th><th class="num">Orders</th><th class="num">IGCC</th>
       <th class="num">QnP%</th><th>Slab</th><th>Line</th>
+      ${trendHeadHTML(stw)}
     </tr></thead><tbody>`;
     rows.forEach((r, i) => {
       th += `<tr class="qnp-store-row" data-store="${r.s}" style="cursor:pointer">
@@ -3277,6 +3298,7 @@ function initQnp() {
         <td class="num" style="font-weight:600">${r.pct == null ? '—' : r.pct.toFixed(2) + '%'}</td>
         <td>${r.slab ? r.slab.label : '—'}</td>
         <td>${linePill(r.pct)}</td>
+        ${trendCellsHTML(storePctSeries(r.s, stw))}
       </tr>`;
     });
     th += '</tbody></table>';
@@ -3309,6 +3331,7 @@ function initQnp() {
     lineCard.style.display = 'none';
     slabCard.style.display = 'none';
     slCard.style.display   = 'none';
+    renderStoreTrend(store, weeks);
 
     if (selectedQnpItem) {
       const nm = ITEM_NAMES[selectedQnpItem] || (RCA_SI.names || {})[selectedQnpItem] || selectedQnpItem;
@@ -3418,6 +3441,46 @@ function initQnp() {
             ? ` ${rcaOutside.toLocaleString()} of them sit on item codes with no F&V order row and so aren't in the table above.`
             : '');
     }
+  }
+
+  // Week-by-week QnP% for one store: every selected week with its own orders, IGCC,
+  // QnP%, WoW delta and the slab/Line it fell into that week.
+  function renderStoreTrend(store, weeks) {
+    const series = storePctSeries(store, weeks);
+    const byWk = STORE_WEEK[store] || {};
+    trdTitle.textContent = `Store ${store} — QnP% week on week`;
+    let h = `<table><thead><tr>
+      <th>Week</th><th class="num">Days</th><th class="num">Orders</th><th class="num">IGCC</th>
+      <th class="num">QnP%</th><th class="num">WoW Δ</th><th>Slab</th><th>Line</th>
+    </tr></thead><tbody>`;
+    let prev = null;
+    weeks.forEach((wk, i) => {
+      const rec    = byWk[String(wk)];
+      const orders = rec ? rec[0] : 0;
+      const igcc   = rec ? rec[1] : 0;
+      const p2     = round2(series[i]);
+      const d      = (series[i] != null && prev != null) ? series[i] - prev : null;
+      const nd     = WEEK_DAYS[String(wk)];
+      const sl     = p2 == null ? null : slabOf(p2);
+      h += `<tr>
+        <td style="font-weight:600">Wk${wk}${PARTIAL[String(wk)] ? ' <span style="color:var(--muted);font-size:11px">partial</span>' : ''}</td>
+        <td class="num">${nd == null ? '—' : nd + '/7'}</td>
+        <td class="num">${orders.toLocaleString()}</td>
+        <td class="num">${igcc.toLocaleString()}</td>
+        <td class="num" style="font-weight:600">${p2 == null ? '—' : p2.toFixed(2) + '%'}</td>
+        <td class="num">${wowPPBadge(d == null ? null : { delta: d })}</td>
+        <td>${sl ? sl.label : '—'}</td>
+        <td>${linePill(p2)}</td>
+      </tr>`;
+      if (series[i] != null) prev = series[i];
+    });
+    h += `</tbody></table>
+      <div style="margin-top:12px;display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px">
+        <span>Trend</span>${sparkSVG(series, 240, 34)}
+        <span>${wowPPBadge(wowFromSeries(series))} latest vs previous week</span>
+      </div>`;
+    trdTbl.innerHTML = h;
+    trdCard.style.display = 'block';
   }
 
   // Reason breakdown for the current scope: count + share of RCA-tagged complaints,
