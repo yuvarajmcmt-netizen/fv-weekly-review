@@ -623,6 +623,15 @@ td.wow-cell{text-align:right}
     </div>
     <div class="wrc-sep"></div>
     <div class="wrc-fg">
+      <span class="wrc-lbl">Line</span>
+      <select id="qnp-line-sel" class="wrc-sel"></select>
+    </div>
+    <div class="wrc-fg">
+      <span class="wrc-lbl">Slab</span>
+      <select id="qnp-slab-sel" class="wrc-sel"></select>
+    </div>
+    <div class="wrc-sep"></div>
+    <div class="wrc-fg">
       <input type="text" id="qnp-store-search" class="rca-search" placeholder="Search store id or city…"/>
     </div>
     <div class="wrc-fg">
@@ -639,6 +648,21 @@ td.wow-cell{text-align:right}
   <div id="qnp-coverage-note" style="font-size:12px;color:var(--muted);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;display:none"></div>
 
   <div id="qnp-overlap-note" style="font-size:12px;color:var(--muted);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;display:none"></div>
+
+  <div class="chart-card" id="qnp-line-card" style="display:none">
+    <h2 id="qnp-line-title">Store QnP% — Line summary</h2>
+    <div class="tbl-wrap"><div id="qnp-line-tbl"></div></div>
+  </div>
+
+  <div class="chart-card" id="qnp-slab-card" style="display:none">
+    <h2 id="qnp-slab-title">Store QnP% — slab distribution</h2>
+    <div class="tbl-wrap"><div id="qnp-slab-tbl"></div></div>
+  </div>
+
+  <div class="chart-card" id="qnp-storelist-card" style="display:none">
+    <h2 id="qnp-storelist-title">Stores</h2>
+    <div class="tbl-wrap" style="max-height:560px;overflow-y:auto"><div id="qnp-storelist-tbl"></div></div>
+  </div>
 
   <div class="chart-card" id="qnp-item-card" style="display:none">
     <h2 id="qnp-item-title">Store × Item × Week breakdown</h2>
@@ -843,6 +867,53 @@ function trendCellsHTML(vals) {
   return vals.map(v => `<td class="num">${v == null ? '<span style="color:var(--muted)">—</span>' : v.toFixed(2) + '%'}</td>`).join('')
        + `<td class="num">${sparkSVG(vals)}</td>`
        + `<td class="num">${wowPPBadge(wowFromSeries(vals))}</td>`;
+}
+
+// ── Store QnP% slabs and Lines ────────────────────────────────────────────────
+// Slabs step 0.20pp from 1.00% up to 2.50%, with open-ended buckets at both ends.
+// Membership is (lo, hi] — i.e. pct > lo && pct <= hi — so a store sitting exactly
+// on a boundary like 1.20% lands in the 1.01–1.20% slab, not the next one up.
+const SLABS = [
+  { key: 'a', label: '≤ 1.00%',       lo: -Infinity, hi: 1.00 },
+  { key: 'b', label: '1.01 – 1.20%',  lo: 1.00, hi: 1.20 },
+  { key: 'c', label: '1.21 – 1.40%',  lo: 1.20, hi: 1.40 },
+  { key: 'd', label: '1.41 – 1.60%',  lo: 1.40, hi: 1.60 },
+  { key: 'e', label: '1.61 – 1.80%',  lo: 1.60, hi: 1.80 },
+  { key: 'f', label: '1.81 – 2.00%',  lo: 1.80, hi: 2.00 },
+  { key: 'g', label: '2.01 – 2.20%',  lo: 2.00, hi: 2.20 },
+  { key: 'h', label: '2.21 – 2.40%',  lo: 2.20, hi: 2.40 },
+  { key: 'i', label: '2.41 – 2.50%',  lo: 2.40, hi: 2.50 },
+  { key: 'j', label: '> 2.50%',       lo: 2.50, hi: Infinity },
+];
+
+// Lines group the slabs: Green ≤1.40, Orange 1.41–2.00, Red >2.00
+const LINES = [
+  { key: 'Green',  label: 'Green Line',  range: '≤ 1.40%',      fg: '#3fb950', bg: 'rgba(63,185,80,.15)',  lo: -Infinity, hi: 1.40 },
+  { key: 'Orange', label: 'Orange Line', range: '1.41 – 2.00%', fg: '#d29922', bg: 'rgba(210,153,34,.18)', lo: 1.40, hi: 2.00 },
+  { key: 'Red',    label: 'Red Line',    range: '> 2.00%',      fg: '#f85149', bg: 'rgba(248,81,73,.15)',  lo: 2.00, hi: Infinity },
+];
+
+// Classify on the value as DISPLAYED (2 dp), not the raw float. A store at 2.5041%
+// renders as "2.50%" but raw-compares as > 2.50, which would show "2.50%" sitting in
+// the "> 2.50%" slab — the row contradicting itself. Rounding first keeps the number
+// on screen and the slab it is placed in consistent.
+function round2(v) {
+  return (v == null || !isFinite(v)) ? null : Math.round(v * 100) / 100;
+}
+
+function slabOf(pct) {
+  if (pct == null || !isFinite(pct)) return null;
+  return SLABS.find(s => pct > s.lo && pct <= s.hi) || null;
+}
+function lineOf(pct) {
+  if (pct == null || !isFinite(pct)) return null;
+  return LINES.find(l => pct > l.lo && pct <= l.hi) || null;
+}
+function linePill(pct, withRange) {
+  const L = lineOf(pct);
+  if (!L) return '<span style="color:var(--muted)">—</span>';
+  return `<span class="tier-pill" style="background:${L.bg};color:${L.fg}">${L.label}`
+       + (withRange ? ` <span style="opacity:.75">${L.range}</span>` : '') + `</span>`;
 }
 
 // ── Store x Item RCA bucket helpers (rca_daily_igcc_5 via rca_store_item.csv) ──
@@ -2826,9 +2897,58 @@ function initQnp() {
   const itemCard  = document.getElementById('qnp-item-card');
   const itemTitle = document.getElementById('qnp-item-title');
   const itemTbl   = document.getElementById('qnp-item-tbl');
+  const lineSel   = document.getElementById('qnp-line-sel');
+  const slabSel   = document.getElementById('qnp-slab-sel');
+  const lineCard  = document.getElementById('qnp-line-card');
+  const lineTbl   = document.getElementById('qnp-line-tbl');
+  const slabCard  = document.getElementById('qnp-slab-card');
+  const slabTbl   = document.getElementById('qnp-slab-tbl');
+  const slCard    = document.getElementById('qnp-storelist-card');
+  const slTitle   = document.getElementById('qnp-storelist-title');
+  const slTbl     = document.getElementById('qnp-storelist-tbl');
 
   const PARTIAL   = Q.partial_weeks || {};
   const WEEK_DAYS = Q.week_days || {};
+
+  lineSel.innerHTML = '<option value="">All Lines</option>'
+    + LINES.map(l => `<option value="${l.key}">${l.label} (${l.range})</option>`).join('');
+  slabSel.innerHTML = '<option value="">All slabs</option>'
+    + SLABS.map(s => `<option value="${s.key}">${s.label}</option>`).join('');
+
+  // store -> {pct, total, igcc, slab, line} for the current week selection.
+  // Recomputed whenever weeks change, since a store's slab depends on the range.
+  let statsCache = { key: null, map: null };
+  function storeStats(weeks) {
+    const ck = weeks.join(',');
+    if (statsCache.key === ck) return statsCache.map;
+    const map = {};
+    ALL_STORES.forEach(s => {
+      const a = aggStoreLevel([s], weeks);
+      // round once, then use that same value for display AND classification
+      const pct = a.total ? round2(a.pct) : null;
+      map[s] = { total: a.total, igcc: a.igcc, pct,
+                 slab: slabOf(pct), line: lineOf(pct) };
+    });
+    statsCache = { key: ck, map };
+    return map;
+  }
+
+  // stores passing the Line + Slab + text filters
+  function filteredStores(weeks) {
+    const stats = storeStats(weeks);
+    const q  = searchEl.value.trim().toLowerCase();
+    const ln = lineSel.value, sb = slabSel.value;
+    return ALL_STORES.filter(s => {
+      const st = stats[s];
+      if (ln && (!st.line || st.line.key !== ln)) return false;
+      if (sb && (!st.slab || st.slab.key !== sb)) return false;
+      if (q) {
+        const city = (STORE_CITY[s] || '').toLowerCase();
+        if (!s.toLowerCase().includes(q) && !city.includes(q)) return false;
+      }
+      return true;
+    });
+  }
 
   ALL_WEEKS.forEach(wk => {
     const nd  = WEEK_DAYS[String(wk)];
@@ -2853,22 +2973,23 @@ function initQnp() {
   }
 
   function refreshStoreOptions() {
-    const q = searchEl.value.trim().toLowerCase();
-    const prev = storeSel.value;
+    const weeks = filteredWeeks();
+    const stats = storeStats(weeks);
+    const prev  = storeSel.value;
     storeSel.innerHTML = '<option value="">— overall (all stores) —</option>';
-    ALL_STORES
-      .filter(s => {
-        if (!q) return true;
-        const city = (STORE_CITY[s] || '').toLowerCase();
-        return s.toLowerCase().includes(q) || city.includes(q);
-      })
-      .forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s;
-        opt.textContent = `${s} — ${STORE_CITY[s] || '—'}`;
-        storeSel.appendChild(opt);
-      });
+    filteredStores(weeks).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      const st = stats[s];
+      const pct = st.pct == null ? '—' : st.pct.toFixed(2) + '%';
+      opt.value = s;
+      opt.textContent = `${s} — ${STORE_CITY[s] || '—'} · ${pct}${st.line ? ' · ' + st.line.key : ''}`;
+      storeSel.appendChild(opt);
+    });
+    // If the previously chosen store no longer passes the Line/Slab filter, fall back
+    // to the overall view rather than silently showing a store outside the filter.
     if ([...storeSel.options].some(o => o.value === prev)) storeSel.value = prev;
+    else storeSel.value = '';
   }
 
   // Canonical store-level total/igcc, summed over a set of stores + weeks (source of truth).
@@ -2911,14 +3032,128 @@ function initQnp() {
   }
 
   function renderOverall(weeks) {
-    const agg = aggStoreLevel(ALL_STORES, weeks);
-    kpiRow.innerHTML = kpiHTML('Stores', ALL_STORES.length.toLocaleString(), 'in selected range')
+    const stats = storeStats(weeks);
+    const shown = filteredStores(weeks);
+    const agg   = aggStoreLevel(shown, weeks);
+    const scoped = !!(lineSel.value || slabSel.value || searchEl.value.trim());
+
+    kpiRow.innerHTML = kpiHTML('Stores', shown.length.toLocaleString(),
+                               scoped ? `of ${ALL_STORES.length} (filtered)` : 'in selected range')
       + kpiHTML('Total F&V Orders', agg.total.toLocaleString(), '')
       + kpiHTML('IGCC Orders', agg.igcc.toLocaleString(), '')
       + kpiHTML('Store-level QnP%', agg.pct.toFixed(2) + '%', 'canonical store metric — source of truth');
     overlapEl.style.display = 'none';
     itemCard.style.display = 'none';
-    countEl.textContent = `${ALL_STORES.length} stores`;
+
+    // stores with no orders in range can't be classified — count them separately so
+    // the Line/slab tables always add up to the store total
+    const classifiable = ALL_STORES.filter(s => stats[s].pct != null);
+    const unclassified = ALL_STORES.length - classifiable.length;
+
+    // ── Line summary ────────────────────────────────────────────────────────
+    let lh = `<table><thead><tr>
+      <th>Line</th><th>QnP% range</th><th class="num">Stores</th><th class="num">% of stores</th>
+      <th class="num">Orders</th><th class="num">IGCC</th><th class="num">QnP%</th>
+    </tr></thead><tbody>`;
+    LINES.forEach(L => {
+      const mem = classifiable.filter(s => stats[s].line && stats[s].line.key === L.key);
+      const a = aggStoreLevel(mem, weeks);
+      const share = classifiable.length ? mem.length / classifiable.length * 100 : 0;
+      const on = lineSel.value === L.key;
+      lh += `<tr style="cursor:pointer${on ? ';background:rgba(88,166,255,.14)' : ''}" data-line="${L.key}">
+        <td><span class="tier-pill" style="background:${L.bg};color:${L.fg}">${L.label}</span></td>
+        <td style="color:var(--muted)">${L.range}</td>
+        <td class="num" style="font-weight:600">${mem.length.toLocaleString()}</td>
+        <td class="num">${share.toFixed(1)}%</td>
+        <td class="num">${a.total.toLocaleString()}</td>
+        <td class="num">${a.igcc.toLocaleString()}</td>
+        <td class="num" style="color:${L.fg};font-weight:600">${a.total ? a.pct.toFixed(2) + '%' : '—'}</td>
+      </tr>`;
+    });
+    if (unclassified) {
+      lh += `<tr><td colspan="2" style="color:var(--muted)">No orders in range (unclassified)</td>
+             <td class="num">${unclassified.toLocaleString()}</td><td colspan="4"></td></tr>`;
+    }
+    lh += '</tbody></table>';
+    lineTbl.innerHTML = lh;
+    lineCard.style.display = 'block';
+    lineTbl.querySelectorAll('tr[data-line]').forEach(tr => {
+      tr.addEventListener('click', () => {
+        lineSel.value = (lineSel.value === tr.dataset.line) ? '' : tr.dataset.line;
+        slabSel.value = '';
+        refreshStoreOptions(); renderAll();
+      });
+    });
+
+    // ── Slab distribution ───────────────────────────────────────────────────
+    let sh = `<table><thead><tr>
+      <th>Slab</th><th>Line</th><th class="num">Stores</th><th class="num">% of stores</th>
+      <th class="num">Orders</th><th class="num">IGCC</th><th class="num">QnP%</th><th>Share</th>
+    </tr></thead><tbody>`;
+    const maxN = Math.max(1, ...SLABS.map(s =>
+      classifiable.filter(x => stats[x].slab && stats[x].slab.key === s.key).length));
+    SLABS.forEach(S => {
+      const mem = classifiable.filter(s => stats[s].slab && stats[s].slab.key === S.key);
+      const a = aggStoreLevel(mem, weeks);
+      const share = classifiable.length ? mem.length / classifiable.length * 100 : 0;
+      // a slab sits wholly inside one Line, so colour it by the slab's midpointless
+      // upper bound — take the Line of any representative value inside the slab
+      const rep = S.hi === Infinity ? S.lo + 0.01 : S.hi;
+      const L = lineOf(rep) || LINES[0];
+      const on = slabSel.value === S.key;
+      sh += `<tr style="cursor:pointer${on ? ';background:rgba(88,166,255,.14)' : ''}" data-slab="${S.key}">
+        <td style="font-weight:600">${S.label}</td>
+        <td><span class="tier-pill" style="background:${L.bg};color:${L.fg}">${L.key}</span></td>
+        <td class="num" style="font-weight:600">${mem.length.toLocaleString()}</td>
+        <td class="num">${share.toFixed(1)}%</td>
+        <td class="num">${a.total.toLocaleString()}</td>
+        <td class="num">${a.igcc.toLocaleString()}</td>
+        <td class="num">${a.total ? a.pct.toFixed(2) + '%' : '—'}</td>
+        <td><span style="display:inline-block;height:8px;border-radius:4px;background:${L.fg};width:${(mem.length / maxN * 90).toFixed(1)}px"></span></td>
+      </tr>`;
+    });
+    sh += '</tbody></table>';
+    slabTbl.innerHTML = sh;
+    slabCard.style.display = 'block';
+    slabTbl.querySelectorAll('tr[data-slab]').forEach(tr => {
+      tr.addEventListener('click', () => {
+        slabSel.value = (slabSel.value === tr.dataset.slab) ? '' : tr.dataset.slab;
+        lineSel.value = '';
+        refreshStoreOptions(); renderAll();
+      });
+    });
+
+    // ── Store list for the current filter ───────────────────────────────────
+    const rows = shown.map(s => ({ s, ...stats[s] }))
+                      .sort((a, b) => (b.pct == null ? -1 : b.pct) - (a.pct == null ? -1 : a.pct));
+    slTitle.textContent = `Stores — ${rows.length.toLocaleString()}`
+      + (lineSel.value ? ` · ${lineSel.value} Line` : '')
+      + (slabSel.value ? ` · ${(SLABS.find(x => x.key === slabSel.value) || {}).label}` : '');
+    let th = `<table><thead><tr>
+      <th>#</th><th>Store</th><th>City</th><th class="num">Orders</th><th class="num">IGCC</th>
+      <th class="num">QnP%</th><th>Slab</th><th>Line</th>
+    </tr></thead><tbody>`;
+    rows.forEach((r, i) => {
+      th += `<tr class="qnp-store-row" data-store="${r.s}" style="cursor:pointer">
+        <td>${i + 1}</td>
+        <td style="font-weight:600">${r.s}</td>
+        <td>${STORE_CITY[r.s] || '—'}</td>
+        <td class="num">${r.total.toLocaleString()}</td>
+        <td class="num">${r.igcc.toLocaleString()}</td>
+        <td class="num" style="font-weight:600">${r.pct == null ? '—' : r.pct.toFixed(2) + '%'}</td>
+        <td>${r.slab ? r.slab.label : '—'}</td>
+        <td>${linePill(r.pct)}</td>
+      </tr>`;
+    });
+    th += '</tbody></table>';
+    slTbl.innerHTML = th;
+    slCard.style.display = 'block';
+    slTbl.querySelectorAll('tr.qnp-store-row').forEach(tr => {
+      tr.addEventListener('click', () => { storeSel.value = tr.dataset.store; renderAll(); });
+    });
+
+    countEl.textContent = `${shown.length} stores`
+      + (scoped ? ` of ${ALL_STORES.length}` : '');
   }
 
   function renderStore(store, weeks) {
@@ -2928,10 +3163,20 @@ function initQnp() {
     const gap = itemIgccSum - st.igcc;
     const gapPct = st.igcc ? (gap / st.igcc * 100) : 0;
 
+    const sPct  = st.total ? round2(st.pct) : null;
+    const sSlab = slabOf(sPct);
+    const sLine = lineOf(sPct);
+
+    lineCard.style.display = 'none';
+    slabCard.style.display = 'none';
+    slCard.style.display   = 'none';
+
     kpiRow.innerHTML = kpiHTML('Store', `${store} (${STORE_CITY[store] || '—'})`, '')
       + kpiHTML('Total F&V Orders', st.total.toLocaleString(), '')
       + kpiHTML('IGCC Orders', st.igcc.toLocaleString(), '')
-      + kpiHTML('Store-level QnP%', st.pct.toFixed(2) + '%', 'canonical store metric — source of truth');
+      + kpiHTML('Store-level QnP%', st.pct.toFixed(2) + '%', 'canonical store metric — source of truth')
+      + kpiHTML('Slab', sSlab ? sSlab.label : '—',
+                sLine ? `${sLine.label} · ${sLine.range}` : 'no orders in range');
 
     overlapEl.style.display = 'block';
     overlapEl.innerHTML = `<b>Note:</b> the store-level IGCC count above (${st.igcc.toLocaleString()}) is the authoritative number for this store. ` +
@@ -3043,10 +3288,15 @@ function initQnp() {
   }
 
   refreshStoreOptions();
-  searchEl.addEventListener('input', refreshStoreOptions);
+  searchEl.addEventListener('input', () => { refreshStoreOptions(); renderAll(); });
   storeSel.addEventListener('change', renderAll);
-  fromSel.addEventListener('change', renderAll);
-  toSel.addEventListener('change', renderAll);
+  lineSel.addEventListener('change', () => { slabSel.value = ''; refreshStoreOptions(); renderAll(); });
+  slabSel.addEventListener('change', () => { lineSel.value = ''; refreshStoreOptions(); renderAll(); });
+  // Slabs are relative to the selected weeks, so the per-store stats must be
+  // recomputed (not reused) whenever the range changes.
+  const onWeeks = () => { statsCache = { key: null, map: null }; refreshStoreOptions(); renderAll(); };
+  fromSel.addEventListener('change', onWeeks);
+  toSel.addEventListener('change', onWeeks);
 
   renderAll();
 }
